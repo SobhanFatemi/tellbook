@@ -415,9 +415,9 @@
 
 @media (max-width: 360px) {
   .header-main { gap: 8px; }
-  .header-main .store-logo { height: 48px; max-width: 88px; }
+  .header-main .store-logo { height: 44px; max-width: 72px; }
   .header-actions { gap: 4px; }
-  .header-actions .button { padding-inline: 6px; gap: 4px; }
+  .header-actions .button { padding-inline: 5px; gap: 4px; }
 }
 
 /* Compact the desktop navigation before resorting to scrolling. */
@@ -841,7 +841,7 @@
   .field-label { margin-bottom: 6px; }
   .header-main { padding-block: 12px; gap: 10px; }
   .header-main .store-logo { height: 56px; max-width: 110px; }
-  .site-search { gap: 8px; padding-block: 3px; }
+  .site-search { gap: 8px; padding-block: 3px; flex: 0 0 100%; max-width: 100%; }
   .store-navigation { padding-bottom: 8px; }
   .store-navigation .nav-item { min-height: 46px; padding: 5px 3px; line-height: 1.45; }
   .store-navigation .nav-item svg { width: 15px; height: 15px; }
@@ -889,4 +889,10 @@
   .payment-review, .checkout-invoice, .payment-total, .payment-bank,
   .payment-upload { padding: 16px; }
   .checkout-invoice-items li, .checkout-invoice-totals > div { padding-block: 10px; }
+}
+
+@media (max-width: 360px) {
+  .header-main .store-logo { height: 44px; max-width: 72px; }
+  .intro-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .intro-actions .button { min-width: 0; padding-inline: 6px; }
 }
