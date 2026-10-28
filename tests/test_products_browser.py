@@ -1,0 +1,380 @@
+"""Full-stack product/bundle authoring and cart smoke test, isolated database."""
+import os
+import re
+import signal
+import subprocess
+import time
+import unittest
+import urllib.request
+from pathlib import Path
+
+from django.conf import settings
+from django.test import LiveServerTestCase, override_settings
+from accounts.models import User
+from rest_framework_simplejwt.tokens import RefreshToken
+from core.models import StoreSettings
+from tests.test_catalog_browser import db
+from merchandise.models import Product
+from catalog.models import Book
+from publisher_catalog.models import Publisher, Edition
+from requests_orders.models import Order
+
+
+@unittest.skipUnless(os.environ.get('RUN_BROWSER_TESTS') == '1', 'Browser tests are opt-in.')
+@override_settings(DEBUG=True)
+class ProductsBrowserTests(LiveServerTestCase):
+    def test_products_bundles_cart(self):
+        from playwright.sync_api import sync_playwright, expect
+        staff = User.objects.create_user('09121234568', role='creator')
+        buyer = User.objects.create_user('09121234567')
+        StoreSettings.objects.create(pk=1, shipping_fee=50000, transfer_recipient="حساب آزمایشی فروشگاه", transfer_account="0000000000000000")
+        artifacts = Path(settings.BASE_DIR) / '.impeccable/review/products'
+        artifacts.mkdir(parents=True, exist_ok=True)
+        log = open('/tmp/tellbook-products-browser.log', 'w')
+        server = subprocess.Popen(['npm', 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5181', '--strictPort'], cwd=settings.BASE_DIR, env={**os.environ, 'DEV_API_TARGET': self.live_server_url, 'VITE_API_BASE_URL': '/api'}, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            for _ in range(100):
+                try:
+                    urllib.request.urlopen('http://127.0.0.1:5181', timeout=1).close()
+                    break
+                except OSError: time.sleep(.1)
+            else: self.fail('Vite failed to start')
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, channel=os.environ.get('PLAYWRIGHT_CHANNEL') or None)
+                page = browser.new_page(viewport={'width':1440,'height':1000})
+                page.set_default_timeout(12000)
+                errors, failures = [], []
+                page.on('pageerror', lambda e: errors.append(str(e)))
+                page.on('response', lambda r: failures.append((r.status,r.url)) if r.status >= 400 else None)
+                def login(user):
+                    refresh = db(lambda: RefreshToken.for_user(user))
+                    page.goto('http://127.0.0.1:5181')
+                    page.evaluate('([access,refresh,user])=>{localStorage.setItem("tellbook_access",access);localStorage.setItem("tellbook_refresh",refresh);localStorage.setItem("tellbook_user",JSON.stringify(user));}', [str(refresh.access_token),str(refresh),{'id':user.pk,'phone':user.phone,'role':user.role}])
+                def go(path):
+                    page.goto('http://127.0.0.1:5181'+path)
+                    page.wait_for_load_state('networkidle')
+                def capture(name):
+                    page.wait_for_load_state('networkidle')
+                    page.evaluate('window.scrollTo(0,0)')
+                    self.assertFalse(page.evaluate('document.documentElement.scrollWidth > innerWidth'), name)
+                    page.screenshot(path=str(artifacts / (name+'.png')),full_page=True)
+                login(staff)
+                publisher = db(lambda: Publisher.objects.create(name='ناشر بازه آزمایشی'))
+                range_books = []
+                for price in [100000, 400000]:
+                    book = db(lambda price=price: Book.objects.create(title=f'کتاب قیمت {price}'))
+                    db(lambda book=book, price=price: Edition.objects.create(book=book, publisher=publisher, price=price))
+                    range_books.append(book.pk)
+                for width in [1440, 390]:
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    go('/search')
+                    page.get_by_role('button', name='فیلترها', exact=True).click()
+                    lower = page.get_by_role('slider', name='حداقل قیمت با کشیدن', exact=True)
+                    upper = page.get_by_role('slider', name='حداکثر قیمت با کشیدن', exact=True)
+                    expect(lower).to_have_attribute('aria-valuemin', '100000')
+                    expect(upper).to_have_attribute('aria-valuemax', '400000')
+                    box = lower.bounding_box()
+                    track = page.locator('.price-range-track').bounding_box()
+                    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                    page.mouse.down()
+                    page.mouse.move(track['x'] + track['width'] / 2, box['y'] + box['height'] / 2, steps=8)
+                    page.mouse.up()
+                    self.assertGreater(int(lower.get_attribute('aria-valuenow')), 100000)
+                    self.assertLess(int(lower.get_attribute('aria-valuenow')), 400000)
+                    lower.focus()
+                    lower.press('End')
+                    page.wait_for_url('**/search?min_price=400000')
+                    expect(lower).to_have_attribute('aria-valuenow', '400000')
+                    page.get_by_label('حداقل قیمت', exact=True).fill('۲۰۰۰۰۰')
+                    expect(page.get_by_label('حداقل قیمت', exact=True)).to_have_value('۲۰۰.۰۰۰')
+                    page.get_by_label('حداقل قیمت', exact=True).press('Enter')
+                    expect(page).to_have_url(re.compile(r'/search\?min_price=200000$'))
+                    expect(lower).to_have_attribute('aria-valuenow', '200000')
+                    capture(f'price-range-{width}')
+                db(lambda: Book.objects.filter(pk__in=range_books).delete())
+                db(lambda: publisher.delete())
+                db(lambda: Book.objects.bulk_create([Book(title=f'Pagination {i:03}') for i in range(61)]))
+                for width in [1440,390]:
+                    page.set_viewport_size({'width':width,'height':900})
+                    go('/search?q=Pagination')
+                    expect(page.locator('.book-grid > *')).to_have_count(24)
+                    page.get_by_role('button',name='صفحه بعد',exact=True).click()
+                    expect(page).to_have_url(re.compile('page=2'))
+                    expect(page.locator('.book-grid')).to_contain_text('Pagination ۰۲۴')
+                    page.get_by_role('button',name='صفحه بعد',exact=True).click()
+                    expect(page.locator('.book-grid > *')).to_have_count(13)
+                    expect(page.get_by_role('button',name='صفحه بعد',exact=True)).to_be_disabled()
+                    page.get_by_role('button',name='صفحه قبل',exact=True).click()
+                    expect(page).to_have_url(re.compile('page=2'))
+                go('/')
+                db(lambda: Book.objects.filter(title__startswith='Pagination ').delete())
+                from requests_orders.models import BookRequest
+                db(lambda: BookRequest.objects.create(buyer=buyer, title='درخواست اعلان آزمایشی'))
+                go('/admin')
+                expect(page.locator('a[href="/admin/requests"] .admin-unread-badge')).to_have_text('۱')
+                for width, height in [(1440, 1000), (1024, 768), (1024, 600), (390, 844), (320, 700)]:
+                    page.set_viewport_size({'width': width, 'height': height})
+                    expect(page.locator('.operations-statuses a')).to_have_count(8)
+                    expect(page.locator('.operations-queues .operations-queue')).to_have_count(3)
+                    if width > 760 and height >= 768:
+                        self.assertTrue(page.locator('.admin-sidebar nav').evaluate('(el) => el.scrollHeight <= el.clientHeight + 1'))
+                    if width > 760:
+                        self.assertTrue(page.locator('.admin-nav-label').evaluate_all('(els) => els.every(el => el.scrollWidth <= el.clientWidth + 1)'))
+                    if width <= 760:
+                        toggle = page.get_by_role('button', name='باز کردن منوی مدیریت', exact=True)
+                        toggle.click()
+                        expect(page.get_by_role('navigation', name='منوی مدیریت')).to_be_visible()
+                        self.assertTrue(page.locator('.admin-nav-label').evaluate_all('(els) => els.every(el => el.scrollWidth <= el.clientWidth + 1)'))
+                        capture(f'layout-admin-menu-{width}')
+                        page.get_by_role('button', name='بستن منوی مدیریت', exact=True).click()
+                        expect(page.get_by_role('navigation', name='منوی مدیریت')).not_to_be_visible()
+                        expect(page.locator('.operations-statuses a')).to_have_count(8)
+                        page.locator('.operations-statuses a').first.click()
+                        page.wait_for_url('**/admin/orders?status=awaiting_payment')
+                        go('/admin')
+                    capture(f'layout-admin-{width}-{height}')
+                page.set_viewport_size({'width': 1440, 'height': 1000})
+                go('/admin/requests')
+                expect(page.locator('a[href="/admin/requests"] .admin-unread-badge')).to_have_count(0)
+                go('/admin/products')
+                page.get_by_role('button',name='محصول تازه',exact=True).click()
+                page.get_by_label('نام محصول یا پک',exact=True).fill('بوکمارک آزمایشی')
+                page.get_by_label('دسته‌بندی',exact=True).fill('بوکمارک')
+                page.get_by_label('معرفی محصول',exact=True).fill('محصول آزمایشی برای بررسی خرید جداگانه و موجودی مشترک پک.')
+                page.get_by_label('قیمت فروش (تومان)',exact=True).fill('۶۹۰۰۰')
+                page.get_by_label('فعال و قابل سفارش',exact=True).check()
+                page.get_by_role('button',name='ذخیره محصول',exact=True).click()
+                page.locator('input[type=file]').wait_for(state='attached')
+                # Existing brand raster is a test-only upload fixture, not product artwork.
+                page.locator('input[type=file]').set_input_files(str(Path(settings.BASE_DIR)/'public/brand/tellbook-wordmark.png'))
+                page.get_by_label('توضیح تصویر',exact=True).fill('تصویر آزمایشی؛ عکس واقعی محصول نیست')
+                page.get_by_role('button',name='افزودن تصویر',exact=True).click()
+                expect(page.locator('.product-image-list img')).to_have_count(1)
+                page.get_by_role('button',name='بازگشت به فهرست',exact=True).click()
+                page.get_by_role('button',name='پک تازه',exact=True).click()
+                page.get_by_label('نام محصول یا پک',exact=True).fill('پک پاییز — آزمایشی')
+                page.get_by_label('معرفی محصول',exact=True).fill('یک پک ثابت با دو بوکمارک؛ داده آزمایشی برای بررسی فروشگاه.')
+                page.get_by_label('قیمت کل پک (تومان)',exact=True).fill('۱۲۰۰۰۰')
+                page.get_by_label('افزودن محصول به پک',exact=True).select_option(label='بوکمارک آزمایشی')
+                page.get_by_role('button',name='افزودن محصول',exact=True).click()
+                page.get_by_label('تعداد بوکمارک آزمایشی',exact=True).fill('۲')
+                page.get_by_label('فعال و قابل سفارش',exact=True).check()
+                page.get_by_label('نمایش در بنر صفحه اول، زمانی که قابل خرید است',exact=True).check()
+                page.get_by_role('button',name='ذخیره محصول',exact=True).click()
+                page.locator('input[type=file]').wait_for(state='attached')
+                page.locator('input[type=file]').set_input_files(str(Path(settings.BASE_DIR)/'public/brand/tellbook-wordmark.png'))
+                page.get_by_role('button',name='افزودن تصویر',exact=True).click()
+                expect(page.locator('.product-image-list img')).to_have_count(1)
+                page.get_by_label('توضیح تصویر',exact=True).fill('نمای دوم آزمایشی؛ تصویر واقعی محصول نیست')
+                page.locator('input[type=file]').set_input_files(str(Path(settings.BASE_DIR)/'public/brand/tellbook-admin-wordmark.png'))
+                page.get_by_role('button',name='افزودن تصویر',exact=True).click()
+                expect(page.locator('.product-image-list img')).to_have_count(2)
+                capture('editor-desktop')
+                page.set_viewport_size({'width':390,'height':844})
+                capture('editor-mobile')
+                bundle_id = db(lambda: Product.objects.get(is_bundle=True).pk)
+                login(buyer)
+                from requests_orders.models import Quote
+                failed_request = db(lambda: BookRequest.objects.create(buyer=buyer, title='درخواست ناموفق آزمایشی', status='failed', failure_reason='تهیه نشد'))
+                db(lambda: Quote.objects.create(request=failed_request, book_cost=100000, estimated_days=5))
+                go('/requests')
+                expect(page.get_by_text('درخواست ناموفق آزمایشی', exact=True)).to_be_visible()
+                expect(page.get_by_role('button', name='بررسی قیمت و پرداخت')).to_have_count(0)
+                for width, suffix in [(1440,'desktop'),(390,'mobile')]:
+                    page.set_viewport_size({'width':width,'height':1000 if width==1440 else 844})
+                    go('/')
+                    expect(page.get_by_role('link',name='مشاهده و خرید پک')).to_be_visible()
+                    capture('home-'+suffix)
+                    if width == 390:
+                        groups = page.locator('.footer-content > div').evaluate_all('(els) => els.map(el => {const r=el.getBoundingClientRect();return r.x+r.width/2})')
+                        for center in groups:
+                            self.assertAlmostEqual(center, width / 2, delta=1)
+                    expect(page.get_by_role('navigation', name='منوی فروشگاه').get_by_role('link')).to_have_count(3)
+                    account = page.get_by_role('button', name=re.compile('حساب من'))
+                    account.focus()
+                    page.keyboard.press('Enter')
+                    menu = page.get_by_role('navigation', name='حساب من', exact=True)
+                    expect(menu.get_by_role('link')).to_have_count(6)
+                    expect(page.locator('.header-actions').get_by_role('link', name=re.compile('سبد خرید'))).to_be_visible()
+                    capture('account-'+suffix)
+                    page.keyboard.press('Tab')
+                    expect(menu.get_by_role('link', name='پروفایل', exact=True)).to_be_focused()
+                    page.keyboard.press('Escape')
+                    expect(account).to_be_focused()
+                    expect(menu).to_have_count(0)
+                    account.click()
+                    page.mouse.click(page.viewport_size['width'] - 5, 5)
+                    expect(menu).to_have_count(0)
+                    account.click()
+                    menu.get_by_role('link', name='پروفایل', exact=True).click()
+                    page.wait_for_url('**/profile')
+                    expect(menu).to_have_count(0)
+                    go('/')
+                    go('/products')
+                    capture('catalog-'+suffix)
+                    go(f'/products/{bundle_id}')
+                    expect(page.get_by_role('link',name='خرید جداگانه')).to_be_visible()
+                    page.get_by_role('button',name='نمایش تصویر ۲',exact=True).click()
+                    expect(page.locator('.product-detail figcaption')).to_have_text('نمای دوم آزمایشی؛ تصویر واقعی محصول نیست')
+                    capture('detail-'+suffix)
+                    old_image = page.locator('.product-detail .product-photo img').get_attribute('src')
+                    page.get_by_role('link',name='خرید جداگانه',exact=True).click()
+                    expect(page.get_by_role('heading',name='بوکمارک آزمایشی',exact=True)).to_be_visible()
+                    expect(page.locator('.product-detail .product-photo img')).not_to_have_attribute('src',old_image)
+                    go(f'/products/{bundle_id}')
+                page.get_by_role('button',name='افزودن به سبد خرید',exact=True).click()
+                page.wait_for_url('**/cart')
+                expect(page.get_by_role('button',name='ثبت سفارش و پرداخت',exact=True)).to_be_visible()
+                page.get_by_role('radio', name=re.compile('ارسال پس از آماده‌شدن')).check()
+                for label, value in [('نام گیرنده', 'خریدار آزمایشی'), ('شماره تماس', '09121234567'), ('استان', 'تهران'), ('شهر', 'تهران'), ('آدرس کامل', 'خیابان آزمایشی، پلاک ۱۲'), ('کد پستی', '1234567890')]:
+                    page.get_by_label(label, exact=True).fill(value)
+                expect(page.get_by_role('button', name='ثبت سفارش و پرداخت', exact=True)).to_be_enabled()
+                capture('cart-mobile')
+                page.set_viewport_size({'width':1440,'height':1000})
+                capture('cart-desktop')
+                page.get_by_label('تعداد پک پاییز — آزمایشی', exact=True).select_option('2')
+                expect(page.get_by_label('نام گیرنده', exact=True)).to_have_value('خریدار آزمایشی')
+                page.get_by_label('تعداد پک پاییز — آزمایشی', exact=True).select_option('1')
+                expect(page.get_by_label('نام گیرنده', exact=True)).to_have_value('خریدار آزمایشی')
+                page.get_by_role('radio', name=re.compile('روی قفسه نگه دارید')).check()
+                page.get_by_role('button',name='ثبت سفارش و پرداخت',exact=True).click()
+                page.wait_for_url('**/cart?order=*')
+                expect(page.get_by_text('پک پاییز — آزمایشی',exact=False).first).to_be_visible()
+                for width in [1440, 390]:
+                    page.set_viewport_size({'width': width, 'height': 900})
+                    capture(f'payment-{width}')
+                self.assertEqual(db(lambda: Product.objects.get(is_bundle=False).quantity),0)
+                page.locator('input[type=file]').set_input_files(str(Path(settings.BASE_DIR)/'public/brand/tellbook-wordmark.png'))
+                page.get_by_role('button',name='ارسال رسید',exact=True).click()
+                expect(page.get_by_role('status').filter(has_text='رسیدت رسید')).to_be_visible()
+                login(staff)
+                go('/admin/orders')
+                for width in [1440, 390]:
+                    page.set_viewport_size({'width': width, 'height': 1000})
+                    expect(page.get_by_role('button', name='دریافت رسید پرداخت', exact=True)).to_be_visible()
+                    if width == 390:
+                        page.get_by_label('وضعیت سفارش', exact=True).select_option('awaiting_payment')
+                        page.wait_for_url('**/admin/orders?status=awaiting_payment')
+                        expect(page.get_by_role('button', name='تایید پرداخت', exact=True)).to_be_visible()
+                    capture(f'admin-orders-{width}')
+                with page.expect_download():
+                    page.get_by_role('button', name='دریافت رسید پرداخت', exact=True).click()
+                page.get_by_role('button', name='رد رسید', exact=True).click()
+                expect(page.get_by_label('دلیل رد رسید', exact=True)).to_be_visible()
+                expect(page.get_by_role('button', name='رد رسید', exact=True)).to_be_disabled()
+                page.get_by_label('دلیل رد رسید', exact=True).fill('رسید آزمایشی')
+                expect(page.get_by_role('button', name='رد رسید', exact=True)).to_be_enabled()
+                go('/admin/orders')
+                page.get_by_role('button',name='تایید پرداخت',exact=True).click()
+                expect(page.get_by_role('button',name='تایید پرداخت',exact=True)).to_have_count(0)
+                for width in [1440, 390]:
+                    page.set_viewport_size({'width': width, 'height': 1000})
+                    expect(page.get_by_role('button', name='شروع تهیه سفارش', exact=True)).to_be_visible()
+                    actions = page.locator('.admin-order-actions > .admin-order-action-grid > button')
+                    expect(actions).to_have_count(2)
+                    boxes = actions.evaluate_all('(els) => els.map(el => {const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}})')
+                    self.assertLess(max(b['width'] for b in boxes) - min(b['width'] for b in boxes), 1)
+                    if width == 1440:
+                        self.assertLess(max(b['y'] for b in boxes) - min(b['y'] for b in boxes), 1)
+                    else:
+                        self.assertTrue(all(boxes[i+1]['y'] >= boxes[i]['y'] + boxes[i]['height'] + 9 for i in range(1)))
+                    capture(f'admin-paid-actions-{width}')
+                page.get_by_role('button', name='تهیه سفارش ممکن نیست', exact=True).click()
+                expect(page.get_by_label('علت تهیه‌نشدن سفارش', exact=True)).to_be_visible()
+                page.get_by_role('button', name='انصراف', exact=True).click()
+                page.get_by_role('button',name='آماده شد',exact=True).click()
+                expect(page.get_by_role('button',name='پک پاییز — آزمایشی — آماده شد',exact=True)).to_have_count(0)
+                login(buyer)
+                go('/shelf')
+                expect(page.get_by_role('heading',name='پک پاییز — آزمایشی',exact=True)).to_be_visible()
+                capture('shelf-desktop')
+                page.set_viewport_size({'width':390,'height':844})
+                capture('shelf-mobile')
+                self.assertEqual(db(lambda: Order.objects.get().status),'stock_ready')
+                page.locator('.shelf-choice input').check()
+                page.get_by_role('radio', name=re.compile('خودم پیک می‌گیرم')).check()
+                page.get_by_label('نام و نام خانوادگی خودتان', exact=True).fill('خریدار آزمایشی')
+                capture('courier-mobile')
+                page.get_by_role('button', name='ثبت تحویل به پیک', exact=True).click()
+                expect(page.get_by_text('بسته آماده هماهنگی پیک است.', exact=False)).to_be_visible()
+                self.assertEqual(db(lambda: Order.objects.get().stock_items.get().shipment.shipping_fee), 0)
+                # Additional operational records use synthetic data in the isolated database.
+                from rest_framework.test import APIClient
+                from payments.models import Payment
+                from refunds.models import Refund
+                from shipping.models import Shipment
+                from uuid import uuid4
+                def operations_fixtures():
+                    book = Book.objects.create(title='کتاب گروهی آزمایشی')
+                    publisher = Publisher.objects.create(name='ناشر گروهی آزمایشی')
+                    edition = Edition.objects.create(book=book, publisher=publisher, price=320000)
+                    client = APIClient()
+                    client.force_authenticate(buyer)
+                    result = client.post('/api/products/checkout/', {'key': str(uuid4()), 'lines': [{'edition_id': edition.pk, 'quantity': 8, 'expected_price': 320000}]}, format='json')
+                    self.assertEqual(result.status_code, 201, result.data)
+                    grouped = Order.objects.get(pk=result.data['id'])
+                    Order.objects.filter(pk=grouped.pk).update(status='paid')
+                    Payment.objects.filter(order=grouped).update(status='verified')
+                    Refund.objects.create(order=grouped, payment=grouped.payment, reason='expired', original_amount=2560000, deduction_amount=0, refund_amount=2560000)
+                    shipment = Shipment.objects.create(buyer=buyer, recipient_name='گیرنده آزمایشی', recipient_phone=buyer.phone, province='تهران', city='تهران', address_line='نشانی آزمایشی', postal_code='1111111111', shipping_fee=175000, status='awaiting_payment')
+                    Payment.objects.create(shipment=shipment, base_amount=175000, status='pending_verification')
+                    pending = client.post('/api/products/checkout/', {'key': str(uuid4()), 'lines': [{'edition_id': edition.pk, 'quantity': 1, 'expected_price': 320000}], 'delivery_mode':'courier', 'collector_name':'خریدار آزمایشی', 'expected_shipping_fee':0}, format='json')
+                    self.assertEqual(pending.status_code,201,pending.data)
+                    return grouped.pk
+                grouped_id = db(operations_fixtures)
+                login(staff)
+                for width in [1440, 390]:
+                    page.set_viewport_size({'width':width,'height':1000})
+                    for route, name in [('/admin/requests','requests-records'),('/admin/refunds','refund-records'),('/admin/shipments','shipment-records'),('/admin/orders','grouped-orders')]:
+                        go(route)
+                        if route == '/admin/requests':
+                            page.get_by_role('button', name='ثبت قیمت', exact=True).click()
+                            expect(page.get_by_label('قیمت کتاب (تومان)',exact=True)).to_be_visible()
+                            page.get_by_role('button', name='امکان تهیه نیست', exact=True).click()
+                            expect(page.get_by_label('دلیل عدم امکان تهیه',exact=True)).to_be_visible()
+                            expect(page.get_by_role('button',name='ثبت به عنوان ناموفق و بازگشت وجه (در صورت پرداخت)',exact=True)).to_be_disabled()
+                            page.get_by_role('button', name='امکان تهیه نیست', exact=True).click()
+                        if route == '/admin/refunds':
+                            expect(page.get_by_role('button', name='ثبت نهایی بازگشت وجه')).to_be_disabled()
+                            page.get_by_label('مبلغ دقیق (تومان)', exact=True).fill('2000000')
+                            expect(page.get_by_label('دلیل تغییر مبلغ (الزامی)', exact=True)).to_be_visible()
+                            page.get_by_label('دلیل تغییر مبلغ (الزامی)', exact=True).fill('توافق با خریدار')
+                            page.locator('.refund-confirm input').check()
+                            expect(page.get_by_role('button', name='ثبت نهایی بازگشت وجه')).to_be_enabled()
+                        if route == '/admin/shipments':
+                            expect(page.get_by_role('button', name='تایید پرداخت', exact=True)).to_have_count(0)
+                        if route == '/admin/orders':
+                            expect(page.get_by_role('button', name='هر ۸ عدد آماده شد', exact=True)).to_be_visible()
+                            expect(page.locator('#shipping-payments').get_by_role('button', name='تایید پرداخت', exact=True)).to_be_visible()
+                        if route == '/admin/orders':
+                            card = page.locator('.admin-order-card').filter(has=page.get_by_role('button', name='هر ۸ عدد آماده شد', exact=True))
+                            card.get_by_role('button', name='لغو یا مرجوعی سفارش', exact=True).click()
+                            expect(card.get_by_label('دلیل لغو یا مرجوعی')).to_be_visible()
+                            expect(card.get_by_role('button', name='تأیید لغو و ثبت بازگشت وجه')).to_be_disabled()
+                            card.get_by_label('دلیل لغو یا مرجوعی').fill('درخواست خریدار')
+                            expect(card.get_by_role('button', name='تأیید لغو و ثبت بازگشت وجه')).to_be_enabled()
+                            capture(f'cancellation-{width}')
+                            card.get_by_role('button', name='انصراف', exact=True).click()
+                        capture(f'{name}-{width}')
+                page.get_by_role('button', name='هر ۸ عدد آماده شد', exact=True).click()
+                expect(page.get_by_role('button', name='هر ۸ عدد آماده شد', exact=True)).to_have_count(0)
+                self.assertEqual(db(lambda: Order.objects.get(pk=grouped_id).stock_items.count()),8)
+                login(buyer)
+                go('/orders')
+                expect(page.locator('.buyer-order-progress-heading').get_by_role('link', name='پیگیری وضعیت سفارش')).to_be_visible()
+                for width in [1440,390]:
+                    page.set_viewport_size({'width':width,'height':1000})
+                    capture(f'buyer-order-tracking-{width}')
+                go('/shipments')
+                expect(page.locator('.buyer-order-progress-heading').get_by_role('link',name='پیگیری وضعیت سفارش')).to_be_visible()
+                expect(page.get_by_text(re.compile('سفارش کتاب شماره'))).to_have_count(0)
+                for width in [1440,390]:
+                    page.set_viewport_size({'width':width,'height':1000})
+                    capture(f'buyer-shipment-tracking-{width}')
+                self.assertEqual(errors,[])
+                self.assertEqual(failures,[])
+                browser.close()
+        finally:
+            os.killpg(server.pid,signal.SIGTERM)
+            server.wait(timeout=15)
+            log.close()

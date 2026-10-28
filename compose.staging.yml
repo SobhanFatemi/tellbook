@@ -1,0 +1,109 @@
+name: tellbook-staging
+
+x-app: &app
+  image: ${TELLBOOK_APP_IMAGE:-tellbook-staging-app}
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile.app
+  restart: unless-stopped
+  environment: &app-env
+    DJANGO_SETTINGS_MODULE: config.staging
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
+    SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+    STAGING_GATE_SECRET: ${STAGING_GATE_SECRET:?Set STAGING_GATE_SECRET}
+    POSTGRES_DB: ${POSTGRES_DB:-tellbook_staging}
+    POSTGRES_USER: ${POSTGRES_USER:-tellbook}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    POSTGRES_HOST: db
+    POSTGRES_PORT: 5432
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/0
+    DJANGO_CACHE_URL: redis://redis:6379/1
+  volumes:
+    - media:/app/media
+    - private_media:/app/private_media
+    - staticfiles:/app/staticfiles
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tellbook_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-tellbook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  app:
+    <<: *app
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 2 --timeout 120 --access-logfile - --error-logfile -
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  worker:
+    <<: *app
+    command: celery -A config worker -Q celery,catalog_imports --concurrency=1 -l info
+  beat:
+    <<: *app
+    command: celery -A config beat -l info --schedule /app/beat/celerybeat-schedule
+    volumes:
+      - beat:/app/beat
+  edge:
+    image: ${TELLBOOK_EDGE_IMAGE:-tellbook-staging-edge}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+      STAGING_PASSWORD_HASH: ${STAGING_PASSWORD_HASH:?Set STAGING_PASSWORD_HASH}
+      STAGING_GATE_SECRET: ${STAGING_GATE_SECRET:?Set STAGING_GATE_SECRET}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - staticfiles:/srv/static:ro
+      - media:/srv/media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  database:
+  redis:
+  media:
+  private_media:
+  staticfiles:
+  beat:
+  caddy_data:
+  caddy_config:

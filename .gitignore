@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.sqlite3
+.env
+media/
+staticfiles/
+.venv/
+venv/
+
+node_modules/
+dist/
+.env.*
+!.env.example
+celerybeat-schedule*
+.playwright/
+.artifacts/
+private_media/
+
+# Local development configuration.
+.agent/
+.agents/
+.claude/
+.codex/
+.gemini/
+.impeccable/
+skills-lock.json
+
+# Private project notes; retained locally, excluded from publication.
+/docs/
+/CONTINUATION.md
+/DESIGN.md
+/PRODUCT.md
+/deploy/README.md

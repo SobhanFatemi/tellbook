@@ -1,0 +1,36 @@
+.git
+.env
+.env.*
+!.env.example
+venv
+.venv
+node_modules
+dist
+media
+private_media
+staticfiles
+.artifacts
+.impeccable
+.agents
+.agent
+.codex
+.claude
+.gemini
+__pycache__
+**/__pycache__
+*.pyc
+*.dump
+*.log
+celerybeat-schedule*
+
+# Development-only metadata and work notes
+skills-lock.json
+CONTINUATION.md
+
+# Private project notes; retained locally, excluded from publication.
+/docs/
+/README.md
+/CONTINUATION.md
+/DESIGN.md
+/PRODUCT.md
+/deploy/README.md

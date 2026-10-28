@@ -1,0 +1,37 @@
+{$SITE_DOMAIN} {
+    header X-Robots-Tag "noindex, nofollow, noarchive"
+    header X-Content-Type-Options nosniff
+    header Referrer-Policy same-origin
+    basic_auth {
+        tester {$STAGING_PASSWORD_HASH}
+    }
+    encode zstd gzip
+    request_body {
+        max_size 60MB
+    }
+    @private_files path /media/payment_proofs/* /media/publisher_imports/* /private_media /private_media/*
+    handle @private_files {
+        respond "Not found" 404
+    }
+    @backend path /api/* /django-admin /django-admin/*
+    handle @backend {
+        reverse_proxy app:8000 {
+            header_up X-Tellbook-Staging-Gate {$STAGING_GATE_SECRET}
+            header_up -Authorization
+        }
+    }
+    handle_path /static/* {
+        root * /srv/static
+        file_server
+    }
+    handle_path /media/* {
+        root * /srv/media
+        file_server
+    }
+    handle {
+        root * /srv/site
+        try_files {path} /index.html
+        header Cache-Control "no-cache"
+        file_server
+    }
+}

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run while app/worker/beat are stopped for a consistent DB+files snapshot.
+set -eu
+umask 077
+cd "$(dirname "$0")/.."
+backup_dir=${1:?Usage: deploy/backup-staging /absolute/new-backup-directory}
+case "$backup_dir" in /*) ;; *) echo 'Use an absolute path.' >&2; exit 1;; esac
+mkdir "$backup_dir"
+deploy/staging exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup_dir/database.dump"
+deploy/staging run --rm --no-deps -T app tar -C /app -czf - media private_media > "$backup_dir/uploads.tar.gz"
+printf '%s\n' 'Backup created. Copy it to independent private storage.'
