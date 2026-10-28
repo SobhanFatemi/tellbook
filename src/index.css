@@ -819,3 +819,74 @@
   .shipment-tracking { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .shipment-tracking-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Phone density: keep form text and touch targets readable while reducing
+   display type and excess vertical space throughout buyer and admin pages. */
+@media (max-width: 600px) {
+  html { font-size: 15px; }
+  body { line-height: 1.7; }
+  h1, h2, h3 { line-height: 1.45; }
+  .site-container, .admin-content { width: calc(100% - 28px); }
+  .page-content { padding-block: 24px 40px; }
+  .admin-content { padding-block: 24px 44px; }
+  .page-title, .operations-heading h1 { font-size: 1.5rem; line-height: 1.4; margin-bottom: 12px; }
+  .surface, .settings-section { padding: 16px; }
+  .empty-state { padding: 36px 18px; }
+  .empty-state > svg { margin-bottom: 12px; }
+  .empty-state p { margin-bottom: 18px; }
+  .button, .action-link, .status-tab { min-height: 44px; }
+  .field-control, .site-search input, .shipment-tracking-code input,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select, textarea { font-size: 16px; }
+  .field-label { margin-bottom: 6px; }
+  .header-main { padding-block: 12px; gap: 10px; }
+  .header-main .store-logo { height: 56px; max-width: 110px; }
+  .site-search { gap: 8px; padding-block: 3px; }
+  .store-navigation { padding-bottom: 8px; }
+  .store-navigation .nav-item { min-height: 46px; padding: 5px 3px; line-height: 1.45; }
+  .store-navigation .nav-item svg { width: 15px; height: 15px; }
+  .store-intro { gap: 18px; padding-block: 4px 28px; }
+  .intro-copy h1 { font-size: 1.75rem; line-height: 1.5; margin-bottom: 12px; }
+  .intro-copy > p { font-size: 1rem; line-height: 1.8; }
+  .intro-actions { margin-top: 18px; gap: 8px; }
+  .intro-catalog { padding: 16px; }
+  .intro-book { padding-block: 10px; }
+  .catalog-section { padding-top: 24px; margin-bottom: 28px; }
+  .section-heading { gap: 10px; margin-bottom: 16px; }
+  .section-heading h2 { font-size: 1.2rem; }
+  .book-card { padding: 12px; gap: 12px; }
+  .book-cover { width: 72px; height: 102px; }
+  .book-card h3 { font-size: .95rem; }
+  .book-card-bottom { padding-top: 8px; }
+  .book-posts { gap: 20px; }
+  .post-gallery > img { height: 250px; }
+  .post-copy { padding: 18px; }
+  .post-copy h3 { font-size: 1.25rem; margin-bottom: 10px; }
+  .post-copy p { line-height: 1.8; }
+  .shelf-explainer { padding-block: 22px; }
+  .product-grid { gap: 20px 12px; }
+  .product-tile h2 { font-size: 1rem; margin-top: 4px; }
+  .product-price, .bundle-feature-copy strong { font-size: 1.3rem; }
+  .bundle-promotion { margin-block: 12px 28px; }
+  .bundle-feature-copy { padding: 18px; gap: 12px; }
+  .bundle-feature-copy h2 { font-size: 1.5rem; line-height: 1.4; }
+  .product-detail { gap: 18px; margin-top: 12px; }
+  .product-description { gap: 14px; }
+  .cart-line { padding-block: 16px; }
+  .cart-summary { padding: 16px; }
+  .admin-sidebar { padding: 14px; }
+  .admin-wordmark { width: 86px; }
+  .admin-nav-item { height: 62px; min-height: 62px; }
+  .admin-topbar { padding: 12px 14px; }
+  .operations-dashboard { gap: 16px; }
+  .operations-panel > header { padding: 14px 16px; }
+  .operations-queue { padding: 16px; }
+  .operations-queue > strong { font-size: 1.3rem; }
+  .operations-statuses a { padding-block: 10px; }
+  .operations-record { padding: 14px 16px; }
+  .admin-record-heading, .admin-record-grid, .admin-record-footer,
+  .admin-order-heading, .admin-order-details, .admin-order-actions,
+  .payment-review, .checkout-invoice, .payment-total, .payment-bank,
+  .payment-upload { padding: 16px; }
+  .checkout-invoice-items li, .checkout-invoice-totals > div { padding-block: 10px; }
+}
