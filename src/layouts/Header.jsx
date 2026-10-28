@@ -29,13 +29,13 @@ export default function Header() {
     </div>
     <nav aria-label="منوی فروشگاه" className="site-container store-navigation">
       <NavItem to="/search" icon={BookOpen}>فهرست کتاب‌ها</NavItem>
-      <NavItem to="/products" icon={ShoppingBag}>پک‌ها و همراه‌های کتاب</NavItem>
+      <NavItem to="/products" icon={ShoppingBag} mobileLabel="پک‌ها و همراه‌ها">پک‌ها و همراه‌های کتاب</NavItem>
       <NavItem to="/request-a-book" icon={BookPlus}>درخواست کتاب</NavItem>
     </nav>
   </header>;
 }
-function NavItem({ to, icon: Icon, children }) {
-  return <NavLink to={to} className={({ isActive }) => `nav-item${isActive ? " is-active" : ""}`}><Icon size={17} aria-hidden="true" />{children}</NavLink>;
+function NavItem({ to, icon: Icon, children, mobileLabel }) {
+  return <NavLink to={to} className={({ isActive }) => `nav-item${isActive ? " is-active" : ""}`}><Icon size={17} aria-hidden="true" />{mobileLabel ? <><span className="nav-desktop-label">{children}</span><span className="nav-mobile-label">{mobileLabel}</span></> : children}</NavLink>;
 }
 
 function AccountDropdown() {
